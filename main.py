@@ -1,5 +1,11 @@
 """
-@ link: https://zhuanlan.zhihu.com/p/144825330
+@project : Translate-en-cn
+@author  : Daniel Yanan ZHOU (周亚楠)
+@contact : adreambottle@outlook.com
+@file    : test.py
+@ide     : PyCharm
+@time    : 2022-06-23
+
 """
 
 
@@ -21,11 +27,11 @@ from collections import Counter
 from torch.autograd import Variable
 
 # 初始化参数设置
-UNK = 0           # 未登录词的标识符对应的词典id
-PAD = 1           # padding占位符对应的词典id
-BATCH_SIZE = 64   # 每批次训练数据数量
-EPOCHS = 20       # 训练轮数
-LAYERS = 6        # transformer中堆叠的encoder和decoder block层数
+UNK = 0           # The id of unknown word in the vocabulary
+PAD = 1           # The id of padding word in the vocabulary
+BATCH_SIZE = 64   # Batch size, data number in a data
+EPOCHS = 20       # Epochs
+LAYERS = 6        # encoder and decoder blocks number in the transformer
 H_NUM = 8         # multihead attention hidden个数
 D_MODEL = 256     # embedding维数
 D_FF = 1024       # feed forward第一个全连接层维数
@@ -82,6 +88,7 @@ class PrepareData:
         self.train_data = self.splitBatch(self.train_en, self.train_cn, BATCH_SIZE)
         self.dev_data = self.splitBatch(self.dev_en, self.dev_cn, BATCH_SIZE)
 
+
     def load_data(self, path):
         """
         读取翻译前(英文)和翻译后(中文)的数据文件
@@ -94,19 +101,7 @@ class PrepareData:
         en = []
         cn = []
         
-        # TODO ...
-        with open(path, 'r', encoding='utf-8') as fin:
-            for line in fin:
-                list_content = line.split('\t')
-                
-                # print(list_content)
-                en.append(['BOS'] + word_tokenize(list_content[0]) + ['EOS'])
-                cn.append(['BOS'] + word_tokenize(" ".join(list_content[1])) + ['EOS'])
-        
-        en = []
-        cn = []
-        
-        path = "./corpus/translation2019zh/translation2019zh_valid_39323.json"
+        path = "./corpus/translation2019zh_valid_39323.json"
         json_list = json.load(open(path))
         for list_content in json_list:
             en.append(['BOS'] + word_tokenize(list_content["english"]) + ['EOS'])
@@ -114,7 +109,8 @@ class PrepareData:
 
 
         return en, cn
-    
+
+
     def build_dict(self, sentences, max_words = 50000):
         """
         传入load_data构造的分词后的列表数据
@@ -224,9 +220,6 @@ class Embeddings(nn.Module):
         return self.lut(x) * math.sqrt(self.d_model)
 
 
-# 导入依赖库
-import matplotlib.pyplot as plt
-import seaborn as sns
 
 
 
@@ -256,8 +249,8 @@ class PositionalEncoding(nn.Module):
         div_term = torch.exp(torch.arange(0., d_model, 2, device=DEVICE) * -(math.log(10000.0) / d_model))
         
         # TODO: 根据公式，计算各个位置在各embedding维度上的位置纹理值，存放到pe矩阵中
-        pe[:, 0::2] =  torch.sin(position * div_term)
-        pe[:, 1::2] =  torch.cos(position * div_term)
+        pe[:, 0::2] = torch.sin(position * div_term)
+        pe[:, 1::2] = torch.cos(position * div_term)
         
         # 加1个维度，使得pe维度变为：1×max_len×embedding维度
         # (方便后续与一个batch的句子所有词的embedding批量相加)
@@ -339,12 +332,11 @@ class MultiHeadedAttention_v2(nn.Module):
     
         N = Q.shape[0]   # Size of one batch
         H = self.H       # Number of heads
-        D = self.D       # Seperated dimension
+        D = self.D       # Separated dimension
         L = Q.shape[1]   # Number of tokens in a sentence
 
-
-        # Get the value of Q, K, V by seperated into 
-        # Change the dimension of L and H to perform multihead attention
+        # Get the value of Q, K, V
+        # Change the dimension of L and H to perform multiheaded attention
         Q = self.Wq(Q).view(N, L, H, D).transpose(1, 2)
         K = self.Wk(K).view(N, L, H, D).transpose(1, 2)
         V = self.Wv(V).view(N, L, H, D).transpose(1, 2)
@@ -353,7 +345,7 @@ class MultiHeadedAttention_v2(nn.Module):
         x, atten = attention(Q, K, V, mask, dropout)
         self.atten = atten
 
-        # Concatinate the separated heads into the original shape
+        # Concatenate the separated heads into the original shape
         x = x.transpose(1, 2).contiguous().view(N, L, H*D)
         
         x = self.FC(x)
@@ -416,36 +408,74 @@ class Batch:
     "Object for holding a batch of data with mask during training."
     def __init__(self, src, trg=None, pad=0):
         
-        # Change numpy array into torch.Tensor using long
-        src = torch.from_numpy(src).to(DEVICE).long()
-        trg = torch.from_numpy(trg).to(DEVICE).long()
+        # Change numpy array into torch.Tensor using long int
+        src = torch.from_numpy(src).to(DEVICE).long()     # src: source English
+        trg = torch.from_numpy(trg).to(DEVICE).long()     # trg: target Chinese
         self.src = src
         
-        # 对于当前输入的句子非空部分进行判断成bool序列
-        # 并在seq length前面增加一维，形成维度为 1×seq length 的矩阵
+        # Get the masked boolean matrix
+        # Add one -2 dimension unsqueeze(-2), shape in (N, 1, L)
         self.src_mask = (src != pad).unsqueeze(-2)
-        # 如果输出目标不为空，则需要对decoder要使用到的target句子进行mask
+
+        # If there is the target data, add mask to the target data in decoder
         if trg is not None:
-            # decoder要用到的target输入部分
+
+            # Because we use the seq to seq model, we have to practice the token one by one
+            # decoder using the left without the last one as the input
             self.trg = trg[:, :-1]
-            # decoder训练时应预测输出的target结果
+
+            # the real token is the last one of the target data when training the decoder
             self.trg_y = trg[:, 1:]
-            # 将target输入部分进行attention mask
+
+            # using the input part to create the attention mask
             self.trg_mask = self.make_std_mask(self.trg, pad)
-            # 将应输出的target结果中实际的词数进行统计
+
+            # statistic the real token numbers in the output target value
             self.ntokens = (self.trg_y != pad).data.sum()
     
-    # Mask 
+    # Mask mechanism
     @staticmethod
     def make_std_mask(tgt, pad):
         """
         Create a mask to hide padding and future words.
+        tgt.shape -> (N, L)
         """
+
+        tgt = torch.randint(5, (4, 10))
+
+        # If element is not equal to padding value, the mask value is true
+        # Then add a new dimension at -2, to spreed the -1 dimension (N, L) -> (N, 1, L)
         tgt_mask = (tgt != pad).unsqueeze(-2)
-        tgt_mask = tgt_mask & Variable(subsequent_mask(tgt.size(-1)).type_as(tgt_mask.data))
-        return tgt_mask
+
+        # subsequent_mask function to generate a mask square with the last dimension L
+        mask_square = subsequent_mask(tgt.size(-1))
+        mask_square = Variable(mask_square.type_as(tgt_mask.data))
+
+        # Spread the new -2 dimension from 1 to L, with the value as both tgt_mask and mask_square
+        # tgt_mask.shape    -> (N, 1, L)
+        # mask_square.shape -> (1, L, L)
+        # attn_mask.shape   -> (N, L, L)
+        attn_mask = tgt_mask & mask_square
+
+        return attn_mask
 
 
+def subsequent_mask(size):
+    """
+    [[0, 1, 1, 1],        [[ True, False, False, False],
+     [0, 0, 1, 1],         [ True,  True, False, False],
+     [0, 0, 0, 1],         [ True,  True,  True, False],
+     [0, 0, 0, 0]]         [ True,  True,  True,  True]]
+    """
+    # Set the mask square size
+    attn_shape = (1, size, size)
+
+    # Generate a triangle matrix with top right 1 (without eye) and left bottom 0
+    subsequent_mask = np.triu(np.ones(attn_shape), k=1).astype('uint8')
+
+    # Generate a triangle matrix with top right False (without eye) and left bottom True
+    subsequent_mask = torch.from_numpy(subsequent_mask) == 0
+    return subsequent_mask
 
 
 class LayerNorm(nn.Module):
@@ -560,16 +590,16 @@ class Encoder(nn.Module):
             x = layer(x, mask)
         return self.norm(x)
 
-d_model = 96
-attn = MultiHeadedAttention(h, d_model).to(DEVICE)
-ff = PositionwiseFeedForward(d_model, d_ff, dropout).to(DEVICE)
-Encoder(
-    EncoderLayer(
-        d_model, 
-        c(attn), 
-        c(ff), 
-        dropout
-    ).to(DEVICE), N).to(DEVICE),
+# d_model = 96
+# attn = MultiHeadedAttention(h, d_model).to(DEVICE)
+# ff = PositionwiseFeedForward(d_model, d_ff, dropout).to(DEVICE)
+# Encoder(
+#     EncoderLayer(
+#         d_model,
+#         c(attn),
+#         c(ff),
+#         dropout
+#     ).to(DEVICE), N).to(DEVICE),
 
 
 class EncoderLayer(nn.Module):
@@ -649,22 +679,6 @@ class DecoderLayer(nn.Module):
         # Context-Attention：注意context-attention的q为decoder hidden，而k和v为encoder hidden
         x = self.functionlayer[1](x, lambda x: self.src_attn(x, m, m, src_mask))
         return self.functionlayer[2](x, self.feed_forward)
-
-
-
-def subsequent_mask(size):
-    "Mask out subsequent positions."
-    # 设定subsequent_mask矩阵的shape
-    attn_shape = (1, size, size)
-    
-    # TODO: 生成一个右上角(不含主对角线)为全1，左下角(含主对角线)为全0的subsequent_mask矩阵
-    subsequent_mask = np.triu(np.ones(attn_shape), k=1).astype('uint8')
-    
-    # TODO: 返回一个右上角(不含主对角线)为全False，左下角(含主对角线)为全True的subsequent_mask矩阵
-    return torch.from_numpy(subsequent_mask) == 0
- 
-plt.figure(figsize=(5,5))
-plt.imshow(subsequent_mask(20)[0])
 
 
 
