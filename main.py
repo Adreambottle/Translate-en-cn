@@ -33,10 +33,10 @@ BATCH_SIZE = 64   # Batch size, data number in a data
 EPOCHS = 20       # Epochs
 LAYERS = 6        # encoder and decoder blocks number in the transformer
 H_NUM = 8         # multihead attention hidden个数
-D_MODEL = 256     # embedding维数
-D_FF = 1024       # feed forward第一个全连接层维数
-DROPOUT = 0.1     # dropout比例
-MAX_LENGTH = 60   # 最大句子长度
+D_MODEL = 256     # embedding dimentions
+D_FF = 1024       # feed forward dimensions
+DROPOUT = 0.1     # dropout rate
+MAX_LENGTH = 60   # The max length of a sentence
 
 TRAIN_FILE = 'nmt/en-cn/train.txt'    # 训练集数据文件
 DEV_FILE = "nmt/en-cn/dev.txt"        # 验证(开发)集数据文件
@@ -47,56 +47,57 @@ DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 def seq_padding(X, padding=0):
     """
-    对一个batch批次(以单词id表示)的数据进行padding填充对齐长度
+    TODO: Padding the sentence with padding id. Make sentence into same length
+    X = [["I", "love", "you"],
+         ["Me", "too"],
+         ["This", "is", "a", "little", "cat"]]
+
+    X = np.array([['I', 'love', 'you', '0', '0'],
+                  ['Me', 'too', '0', '0', '0'],
+                  ['This', 'is', 'a', 'little', 'cat']])
     """
-    # 计算该批次数据各条数据句子长度
+    # Calculate the length of these sentences in a Batch
     L = [len(x) for x in X]
-    # 获取该批次数据最大句子长度
+
+    # Get the max length of these sentences
     ML = max(L)
-    # 对X中各条数据x进行遍历, 如果长度短于该批次数据最大长度ML, 则以padding id填充缺失长度ML-len(x)
+
+    # If the length of a sentence is less than the max length, fill the last ML-len(x) tokens with padding id
     return np.array([
         np.concatenate([x, [padding] * (ML - len(x))]) if len(x) < ML else x for x in X
     ])
 
-"""
-X = [["I", "love", "you"],
-     ["Me", "too"], 
-     ["This", "is", "a", "little", "cat"]]
-
-X = np.array([['I', 'love', 'you', '0', '0'],
-              ['Me', 'too', '0', '0', '0'],
-              ['This', 'is', 'a', 'little', 'cat']], dtype='<U21')
-"""
 
 
 class PrepareData:
     def __init__(self, train_file, dev_file):
         
-        # 读取数据 并分词
+        # Load the data and split into word tokens
         self.train_en, self.train_cn = self.load_data(train_file)
         self.dev_en, self.dev_cn = self.load_data(dev_file)
 
-        # 构建单词表
+        # Build the vocabulary
         self.en_word_dict, self.en_total_words, self.en_index_dict = self.build_dict(self.train_en)
         self.cn_word_dict, self.cn_total_words, self.cn_index_dict = self.build_dict(self.train_cn)
 
-        # id化
+        # Change the word token into id
         self.train_en, self.train_cn = self.wordToID(self.train_en, self.train_cn, self.en_word_dict, self.cn_word_dict)
         self.dev_en, self.dev_cn = self.wordToID(self.dev_en, self.dev_cn, self.en_word_dict, self.cn_word_dict)
 
-        # 划分batch + padding + mask
+        # Pad the data, and split the data into batches
         self.train_data = self.splitBatch(self.train_en, self.train_cn, BATCH_SIZE)
         self.dev_data = self.splitBatch(self.dev_en, self.dev_cn, BATCH_SIZE)
 
 
     def load_data(self, path):
         """
-        读取翻译前(英文)和翻译后(中文)的数据文件
-        每条数据都进行分词, 然后构建成包含起始符(BOS)和终止符(EOS)的单词(中文为字符)列表
-        形式如: en = [['BOS', 'i', 'love', 'you', 'EOS'],
-                     ['BOS', 'me', 'too', 'EOS'], ...]
-               cn = [['BOS', '我', '爱', '你', 'EOS'], 
-                     ['BOS', '我', '也', '是', 'EOS'], ...]
+        read the bilinguistic corpus in English and Chinese
+        use nltk word_tokenize to change corpus into word tokens
+
+        formation: en = [['BOS', 'i', 'love', 'you', 'EOS'],
+                         ['BOS', 'me', 'too', 'EOS'], ...]
+                   cn = [['BOS', '我', '爱', '你', 'EOS'],
+                         ['BOS', '我', '也', '是', 'EOS'], ...]
         """
         en = []
         cn = []
@@ -111,24 +112,26 @@ class PrepareData:
         return en, cn
 
 
+
     def build_dict(self, sentences, max_words = 50000):
         """
-        传入load_data构造的分词后的列表数据
-        构建词典(key为单词, value为id值)
+        Load the tokenized data after load_data
+        Build the word token dictionary {word_token: token_id}
         """
-        # 对数据中所有单词进行计数
+        # Count the token number in all the corpus
         word_count = Counter()
 
         for sentence in sentences:
             for s in sentence:
                 word_count[s] += 1
-        
-        # 只保留最高频的前max_words数的单词构建词典
-        # 并添加上UNK和PAD两个单词, 对应id已经初始化设置过
+
+
+        # Only reserve the top max_words frequency words
+        # Add UNK and PAD, for 0 and 1
         ls = word_count.most_common(max_words)
         
         # 统计词典的总词数
-        total_words = len(ls) + 2       # 因为 1 和 0 已经被占据了
+        total_words = len(ls) + 2       # Because 0 and 1 have been taken placed
         word_dict = {w[0]: index + 2 for index, w in enumerate(ls)}
         word_dict['UNK'] = UNK
         word_dict['PAD'] = PAD
@@ -354,6 +357,7 @@ class MultiHeadedAttention_v2(nn.Module):
         x = self.FC(x)
 
         return x
+
 
 
 class MultiHeadedAttention(nn.Module):
@@ -672,7 +676,7 @@ class DecoderLayer(nn.Module):
     X
     MMHA = Masked_Multiheead_Attention(X)
     AN1  = Add_Norm_Layer(X + MMHA)
-    MHA  = Multihead_Attention(Q,K->Encoder, V->AN1)
+    MHA  = Multihead_Attention(Q->Encoder, K,V->AN1)
     AN2  = Add_Norm_Layer(AN1 + MHA)
     FF   = Feed_Forward(AN2)
     AN3  = Add_Norm_Layer(AN2 + FF)
@@ -695,13 +699,12 @@ class DecoderLayer(nn.Module):
         self.feed_forward = feed_forward
 
         # 3 add and norm layers
-        # self.functional_layer = clones(AddAndNormLayer(size, dropout), 3)
 
+        # Add_Norm_Layer(X + MMHA)
         self.add_norm_1 = AddAndNormLayer(size, dropout, self.self_attn)
+
         self.add_norm_2 = AddAndNormLayer(size, dropout, self.src_attn)
         self.add_norm_3 = AddAndNormLayer(size, dropout, self.feed_forward)
-
-
 
     def forward(self, x, memory, src_mask, tgt_mask):
 
@@ -711,6 +714,7 @@ class DecoderLayer(nn.Module):
         # TODO: 参照EncoderLayer完成DecoderLayer的forwark函数
         # Self-Attention：注意self-attention的q，k和v均为decoder hidden
         # x = self.functional_layer[0](x, lambda x: self.self_attn(x, x, x, tgt_mask))
+
         x = self.add_norm_1(x, x, x, x, tgt_mask)
         x = self.add_norm_2(x, x, m, m, src_mask)
         x = self.add_norm_3(x, x)
