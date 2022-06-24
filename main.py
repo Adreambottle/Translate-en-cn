@@ -283,21 +283,22 @@ def attention(query, key, value, mask=None, dropout=None):
     
     # Score = (Q * K^T) / sqrt(d_k)
     # Transpose the matrix with the -1 & -2 dimension, 
-    scores = torch.matmul(query, key.transpose(-2, -1)) / math.sqrt(d_k)
-    
+    scores = torch.matmul(query, key.transpose(-2, -1)) / math.sqrt(d_k)  # scores.shape -> (N, L, L)
+
     # using einsum
     # scores = torch.einsum("nld,nhd->nlh", query, key) / math.sqrt(d_k)
     
     # mask here is a layer
     if mask is not None:
-        scores = scores.masked_fill(mask == 0, -1e9)
+        scores = scores.masked_fill(mask == 0, -1e9)     # mask.shape -> (N, L, L)
         
     # Using Softmax(Score)
     p_attn = F.softmax(scores, dim = -1)
     
     # dropout here is a function or None
     if dropout is not None:
-        p_attn = nn.Dropout(p_attn)
+        Dropout = nn.Dropout(dropout)
+        p_attn = Dropout(p_attn)
     
     # return the attention score = (softmax(Q*K^T)/sqrt(d))*V and the attention matrix
 
@@ -310,13 +311,13 @@ class MultiHeadedAttention_v2(nn.Module):
     TODO: Simplex method 
     """
 
-    def __init__(self, h, d_model):
-        super(self, MultiHeadedAttention_v2).__init__()
+    def __init__(self, h, d_model, dropout=0.1):
+        super(MultiHeadedAttention_v2, self).__init__()
 
         # assert that the original dimension can be fully divided by head numbers
         assert d_model & h == 0
         self.model_dimension = d_model
-        
+        self.dropout = dropout
         self.H = h                     # Number of head
         self.D = int(d_model / h)      
         
@@ -328,8 +329,9 @@ class MultiHeadedAttention_v2(nn.Module):
         # Fully connected layer attached to the final attention score
         self.FC = nn.Linear(d_model, d_model)
 
-    def forward(self, Q, K, V, mask, dropout):
+    def forward(self, Q, K, V, mask):
     
+        dropout = self.dropout
         N = Q.shape[0]   # Size of one batch
         H = self.H       # Number of heads
         D = self.D       # Separated dimension
@@ -343,6 +345,7 @@ class MultiHeadedAttention_v2(nn.Module):
 
         # Call the attention function
         x, atten = attention(Q, K, V, mask, dropout)
+        # print(atten.shape)
         self.atten = atten
 
         # Concatenate the separated heads into the original shape
@@ -365,7 +368,7 @@ class MultiHeadedAttention(nn.Module):
         """
         
         super(MultiHeadedAttention, self).__init__()
-        
+
         assert d_model % h == 0
         self.d_k = d_model // h   # Length of a head
         self.h = h                # head numbers
@@ -378,7 +381,7 @@ class MultiHeadedAttention(nn.Module):
 
         self.linears = clones(nn.Linear(d_model, d_model), 4)
         self.attn = None
-        self.dropout = nn.Dropout(p=dropout)
+        self.dropout = dropout
 
     def forward(self, query, key, value, mask=None):
         if mask is not None:
@@ -441,7 +444,7 @@ class Batch:
         tgt.shape -> (N, L)
         """
 
-        tgt = torch.randint(5, (4, 10))
+        # tgt = torch.randint(5, (4, 10))
 
         # If element is not equal to padding value, the mask value is true
         # Then add a new dimension at -2, to spreed the -1 dimension (N, L) -> (N, 1, L)
@@ -485,9 +488,9 @@ class LayerNorm(nn.Module):
     def __init__(self, size, eps=1e-6):
         """
         size: input dimension
-        """  
-        
+        """
         super(LayerNorm, self).__init__()
+
         # initialization with α = 1, β = 0
         self.a_2 = nn.Parameter(torch.ones(size))
         self.b_2 = nn.Parameter(torch.zeros(size))
@@ -496,7 +499,6 @@ class LayerNorm(nn.Module):
 
     def forward(self, x):
         # Calculate the mean and the standard error using for layer norm
-        
         mean = x.mean(-1, keepdim = True)
         std = x.std(-1, keepdim = True)
         
@@ -508,30 +510,33 @@ class LayerNorm(nn.Module):
 
 class AddAndNormLayer(nn.Module):
     """
-    Add the MHA input and the ff input together
-    MHA input: Multi-Head Attention
-    FF input: feed forward 
-    
     Like Residual Network
-
+    Add the original data and the function layer data together
+    function layer data can be MHA or FF
     There should be a Layer norm after each Layer
-    functionlayer can be MHA or FF
     """
-    def __init__(self, size, dropout):
+    def __init__(self, size, dropout, functionlayer):
         super(AddAndNormLayer, self).__init__()
         
         # Using LayerNorm defined before
-        # self.norm = nn.LayerNorm(size)
         self.norm = LayerNorm(size)
         self.dropout = nn.Dropout(dropout)
+        self.functionlayer = functionlayer
 
-    def forward(self, x, functionlayer):
+        # functionlayer = self_attn
+
+
+
+    def forward(self, org_x, *args):
         
-        # Return the addition of 
-        residual = self.norm(x)
-        residual = functionlayer(residual)
-        residual = self.drop(residual)
-        output = x + residual
+        # Return the addition of original data and the function layer data
+        org_x = self.norm(org_x)
+        residual = self.functionlayer(*args)
+        # attention(ta, ta, ta, mask, dropout)
+        # ff = PositionwiseFeedForward(d_model, d_ff, dropout)
+
+        residual = self.dropout(residual)
+        output = org_x + residual
         
         return output
 
@@ -619,8 +624,8 @@ class EncoderLayer(nn.Module):
         super(EncoderLayer, self).__init__()
         self.self_attn = self_attn
         self.feed_forward = feed_forward
-        self.add_norm_1 = AddAndNormLayer(size,   dropout)
-        self.add_norm_2 = AddAndNormLayer(size, dropout)
+        self.add_norm_1 = AddAndNormLayer(size, dropout, self.self_attn)
+        self.add_norm_2 = AddAndNormLayer(size, dropout, self.feed_forward)
 
         # d_model
         self.size = size
@@ -628,10 +633,10 @@ class EncoderLayer(nn.Module):
     def forward(self, x, mask):
         
         # Data stream inside a 
-        x = self.self_attn(x, x, x, mask)    
-        x = self.add_norm_1(x, self.self_attn)
-        x = self.feed_forward(x)
-        x = self.add_norm_2(x, self.feed_forward)
+        # x = self.self_attn(x, x, x, mask)
+        x = self.add_norm_1(x, x, x, x, mask)
+        # x = self.feed_forward(x)
+        x = self.add_norm_2(x, x)
         
         # 注意到attn得到的结果x直接作为了下一层的输入
         return x
@@ -659,26 +664,59 @@ class Decoder(nn.Module):
 
 
 class DecoderLayer(nn.Module):
+    """
+    * Decoder Layer needs two attention layers
+    * One for self-attention Layer
+    * One for masked-attention Layer
+
+    X
+    MMHA = Masked_Multiheead_Attention(X)
+    AN1  = Add_Norm_Layer(X + MMHA)
+    MHA  = Multihead_Attention(Q,K->Encoder, V->AN1)
+    AN2  = Add_Norm_Layer(AN1 + MHA)
+    FF   = Feed_Forward(AN2)
+    AN3  = Add_Norm_Layer(AN2 + FF)
+    Y    = Linear(AN3)
+    Y    = Softmax(Y)
+    """
+
     def __init__(self, size, self_attn, src_attn, feed_forward, dropout):
         super(DecoderLayer, self).__init__()
+
         self.size = size
-        # Self-Attention
+
+        # Self-Attention for the second
         self.self_attn = self_attn
-        # 与Encoder传入的Context进行Attention
+
+        # Masked-Attention for the first
         self.src_attn = src_attn
+
+        # Feed forward layer
         self.feed_forward = feed_forward
-        self.functionlayer = clones(AddAndNormLayer(size, dropout), 3)
+
+        # 3 add and norm layers
+        # self.functional_layer = clones(AddAndNormLayer(size, dropout), 3)
+
+        self.add_norm_1 = AddAndNormLayer(size, dropout, self.self_attn)
+        self.add_norm_2 = AddAndNormLayer(size, dropout, self.src_attn)
+        self.add_norm_3 = AddAndNormLayer(size, dropout, self.feed_forward)
+
+
 
     def forward(self, x, memory, src_mask, tgt_mask):
-        # 用m来存放encoder的最终hidden表示结果
+
+        # m used for storing the hidden outcome for Q and K from encoder
         m = memory
-        
+
         # TODO: 参照EncoderLayer完成DecoderLayer的forwark函数
         # Self-Attention：注意self-attention的q，k和v均为decoder hidden
-        x = self.functionlayer[0](x, lambda x: self.self_attn(x, x, x, tgt_mask))
+        # x = self.functional_layer[0](x, lambda x: self.self_attn(x, x, x, tgt_mask))
+        x = self.add_norm_1(x, x, x, x, tgt_mask)
+        x = self.add_norm_2(x, x, m, m, src_mask)
+        x = self.add_norm_3(x, x)
         # Context-Attention：注意context-attention的q为decoder hidden，而k和v为encoder hidden
-        x = self.functionlayer[1](x, lambda x: self.src_attn(x, m, m, src_mask))
-        return self.functionlayer[2](x, self.feed_forward)
+        #x = self.functional_layer[1](x, lambda x: self.src_attn(x, m, m, src_mask))
+        return x
 
 
 
@@ -802,7 +840,7 @@ class LabelSmoothing(nn.Module):
  
 class SimpleLossCompute:
     """
-    简单的计算损失和进行参数反向传播更新训练的函数
+    Simple loss calculation and backward broadcast for training the new parameter
     """
     def __init__(self, generator, criterion, opt=None):
         self.generator = generator
@@ -810,14 +848,25 @@ class SimpleLossCompute:
         self.opt = opt
         
     def __call__(self, x, y, norm):
+        # __call__() method to realize the class as a function
         x = self.generator(x)
-        loss = self.criterion(x.contiguous().view(-1, x.size(-1)), 
+
+        # loss = (x - y) / norm, x and y in (N, L*D) 只保留 Batch 这个维度
+        loss = self.criterion(x.contiguous().view(-1, x.size(-1)),
                               y.contiguous().view(-1)) / norm
+
+        # Backward broadcast
         loss.backward()
+
         if self.opt is not None:
+
+            # move the optimizer and zero gradient
             self.opt.step()
             self.opt.optimizer.zero_grad()
+
         return loss.data.item() * norm.float()
+
+
 
 class NoamOpt:
     "Optim wrapper that implements rate."
@@ -847,6 +896,7 @@ class NoamOpt:
 def get_std_opt(model):
     return NoamOpt(model.src_embed[0].d_model, 2, 4000,
             torch.optim.Adam(model.parameters(), lr=0, betas=(0.9, 0.98), eps=1e-9))
+
 
 def run_epoch(data, model, loss_compute, epoch):
     start = time.time()
